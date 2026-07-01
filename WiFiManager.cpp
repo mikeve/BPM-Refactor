@@ -120,7 +120,7 @@ static bool SaveConfig() {
     return true;
 }
 
-bool SaveAdHocNetwork(const String& ssid, const String& password) {
+bool SaveAdhocNetwork(const String& ssid, const String& password) {
     gConfig.adhocSSID = ssid;
     gConfig.adhocPassword = password;
 
@@ -358,7 +358,12 @@ void ServiceWiFiManager() {
                 StartAPMode();
             }
 
-            WebServer::Service(gWebServer);
+            WiFiClient client = gWebServer.available();
+
+            if (client)
+            {
+                WebServer::ProcessClient(client);
+            }
 
             if (gRestartRequested)
             {
@@ -490,7 +495,7 @@ String URLDecode(String strText)
 // // Save Ad Hoc Network
 // //*****************************************************************************
 
-// bool SaveAdHocNetwork(String strSSID, String strPassword) {
+// bool SaveAdhocNetwork(String strSSID, String strPassword) {
 //     if (!SD.exists("/config")) {
 //         SD.mkdir("/config");
 //     }
@@ -650,7 +655,7 @@ void HandleSaveRequest(WiFiClient& client) {
     // Save
     //-------------------------------------------------------------------------
 
-    if (!SaveAdHocNetwork(strSSID, strPassword)) {
+    if (!SaveAdhocNetwork(strSSID, strPassword)) {
         client.println("HTTP/1.1 500 Internal Server Error");
         client.println("Content-Type: text/html");
         client.println();
@@ -730,7 +735,7 @@ void HandleWebClient(WiFiClient& client) {
             strSSID.replace("\x92", "\xE2\x80\x99");
             strPassword = URLDecode(strPassword);
 
-            // Serial.print("Decoded: [");
+            // Serial.print("Decoded: [");a
             // Serial.print(strSSID);
             // Serial.println("]");
         }
@@ -744,7 +749,7 @@ void HandleWebClient(WiFiClient& client) {
         // Serial.println();
 
         // Save the new network
-        if (SaveAdHocNetwork(strSSID, strPassword)) {
+        if (SaveAdhocNetwork(strSSID, strPassword)) {
 
             // Tell the WiFi state machine we're done
             blnProvisioningComplete = true;
