@@ -384,12 +384,6 @@ void ServiceWiFiManager() {
 
             break;
     }
-    WiFiClient client = gWebServer.available();
-
-    if (client)
-    {
-        WebServer::ProcessClient(client);
-    }
 }
 
 bool IsWiFiConnected() {
@@ -688,6 +682,8 @@ void HandleSaveRequest(WiFiClient& client) {
 }
 
 void HandleWebClient(WiFiClient& client) {
+    Serial.println("WiFiManager:HandleWebClient");
+    
     String strSSID;
     String strPassword;
     
