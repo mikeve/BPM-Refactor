@@ -7,10 +7,9 @@
 //
 // Connection timing
 //
-
-const unsigned long WIFI_CONNECT_TIMEOUT_MS = 10000;
-const unsigned long WIFI_RECONNECT_WINDOW_MS = 120000;
-const unsigned long WIFI_STATUS_CHECK_MS = 5000;
+constexpr unsigned long WIFI_CONNECT_TIMEOUT_MS   = 10000;
+constexpr unsigned long WIFI_RECONNECT_WINDOW_MS  = 120000;
+constexpr unsigned long WIFI_STATUS_CHECK_MS      = 5000;
 
 //
 // SD Card Configuration
@@ -65,22 +64,32 @@ extern WIFI_STATE wifiState;
 // Public Interface
 //
 bool InitWiFiManager();
+
 void ServiceWiFiManager();
+
 bool IsWiFiConnected();
+
+bool IsAPMode();
+
 String GetCurrentSSID();
+
 String GetCurrentIPAddress();
-void HandleWebClient(WiFiClient& client);
+
 String GetLastSSID();
 
 String GetAdhocSSID();
 
+//
+// Called by WebServer after a successful POST.
+//
 void RestartConnection();
-bool IsAPMode();
 
 //
-// Called after AP form submission
+// Save (or replace) the stored ad hoc network.
 //
-bool SaveAdHocNetwork(const String& ssid, const String& password);
+bool SaveAdhocNetwork(
+    const String& ssid,
+    const String& password);
 
 //
 // Utility
