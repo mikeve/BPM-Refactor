@@ -45,6 +45,8 @@ namespace WebServer
 
 void ProcessClient(WiFiClient& client)
 {
+    Serial.println("Webserver::ProcessCLient");
+
     String request = client.readStringUntil('\r');
 
     Serial.println();
@@ -82,6 +84,8 @@ namespace
 
 static void ProcessClient(WiFiClient& client)
 {
+    Serial.println("anon::ProcessClient");
+
     String request = client.readStringUntil('\r');
 
     Serial.println();
@@ -146,109 +150,64 @@ static void ProcessClient(WiFiClient& client)
 
 static void ProcessSaveRequest(WiFiClient& client)
 {
-    int contentLength = 0;
+    Serial.println("ProcessSaveRequest");
 
-    //----------------------------------------------------------------------
-    // Read HTTP headers
-    //----------------------------------------------------------------------
-
-    while (client.connected())
-    {
-        String line = client.readStringUntil('\n');
-
-        line.trim();
-
-        if (line.startsWith("Content-Length:"))
-        {
-            contentLength = line.substring(15).toInt();
-        }
-
-        //
-        // Blank line = end of headers
-        //
-        if (line.length() == 0)
-        {
-            break;
-        }
-    }
-
-    //----------------------------------------------------------------------
-    // Read POST body
-    //----------------------------------------------------------------------
-
-    String body;
+    String strBody;
 
     unsigned long start = millis();
 
-    while ((int)body.length() < contentLength &&
-           (millis() - start) < 5000)
+    //
+    // Read everything the browser sends.
+    //
+    while ((millis() - start) < 3000)
     {
         while (client.available())
         {
-            body += (char)client.read();
-
+            char c = client.read();
+            strBody += c;
             start = millis();
         }
     }
 
     Serial.println();
-    Serial.print("POST BODY: ");
-    Serial.println(body);
+    Serial.print("BODY: ");
+    Serial.println(strBody);
 
-    //----------------------------------------------------------------------
-    // Parse
-    //----------------------------------------------------------------------
-
-    String ssid;
-    String password;
+    String strSSID;
+    String strPassword;
 
     if (!ParseProvisioningData(
-            body,
-            ssid,
-            password))
+            strBody,
+            strSSID,
+            strPassword))
     {
         SendSetupPage(client);
-
         return;
     }
 
     Serial.print("SSID: ");
-    Serial.println(ssid);
+    Serial.println(strSSID);
 
     Serial.print("Password: ");
-    Serial.println(password);
+    Serial.println(strPassword);
 
-    //----------------------------------------------------------------------
-    // Save configuration
-    //----------------------------------------------------------------------
-
-    if (!SaveAdHocNetwork(
-            ssid,
-            password))
+    if (!SaveAdhocNetwork(
+            strSSID,
+            strPassword))
     {
         SendSetupPage(client);
-
         return;
     }
 
-    //----------------------------------------------------------------------
-    // Tell WiFiManager to reconnect
-    //----------------------------------------------------------------------
-
     RestartConnection();
-
-    //----------------------------------------------------------------------
-    // Inform browser
-    //----------------------------------------------------------------------
 
     SendSavedPage(client);
 }
-
 /******************************************************************************
  *
  *  Parse Provisioning Data
  *
- *  POST body format:
+ *  handlewebclient format:
  *
  *      ssid=MyNetwork&password=Secret123
  *
