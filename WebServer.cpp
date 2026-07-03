@@ -202,6 +202,8 @@ static void ProcessSaveRequest(WiFiClient& client)
     RestartConnection();
 
     SendSavedPage(client);
+
+    client.flush();
 }
 /******************************************************************************
  *
