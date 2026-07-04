@@ -1,12 +1,7 @@
 #include "WiFiManager.h"
 #include "arduino_secrets_mv.h"
-#include "WebServer.h"
 
 WIFI_STATE wifiState = WIFI_STARTUP;
-//
-// Local web server used while in AP mode.
-//
-static WiFiServer gWebServer(80);
 
 //
 // Configuration
@@ -18,8 +13,6 @@ static unsigned long gConnectStartTime = 0;
 static unsigned long gDisconnectTime = 0;
 
 static bool gConnectionAttemptActive = false;
-
-static bool gRestartRequested = false;
 
 //
 // State machine timers
@@ -100,8 +93,9 @@ static bool SaveConfig() {
         SD.mkdir("/config");
     }
 
+    SD.remove(NETWORK_CONFIG_FILE);
 
-    File file = SD.open(NETWORK_CONFIG_FILE, O_WRITE | O_CREAT | O_TRUNC);
+    File file = SD.open(NETWORK_CONFIG_FILE, FILE_WRITE);
 
     if (!file) {
         return false;
@@ -220,8 +214,6 @@ static void StartAPMode() {
     Serial.println("AP MODE STARTED");
     Serial.println(apName);
     Serial.println("192.168.4.1");
-
-    gWebServer.begin();
 
     gAPStarted = true;
 }
@@ -352,36 +344,9 @@ void ServiceWiFiManager() {
             break;
     
         case WIFI_AP_MODE:
-
-            if (!gAPStarted)
-            {
+            if (!gAPStarted) {
                 StartAPMode();
             }
-
-            WiFiClient client = gWebServer.available();
-
-            if (client)
-            {
-                WebServer::ProcessClient(client);
-            }
-
-            if (gRestartRequested)
-            {
-                gRestartRequested = false;
-
-                WiFi.end();
-
-                gAPStarted = false;
-
-                BuildSearchList();
-
-                gCurrentCycle = 0;
-                gCurrentNetworkIndex = 0;
-                gConnectionAttemptActive = false;
-
-                wifiState = WIFI_TRY_NETWORK;
-            }
-
             break;
     }
 }
@@ -405,32 +370,328 @@ bool IsAPMode() {
     return wifiState == WIFI_AP_MODE;
 }
 
-/******************************************************************************
- *
- *  Restart Connection
- *
- ******************************************************************************/
- 
-void RestartConnection()
-{
-    Serial.println("*** RestartConnection() called ***");
-    gRestartRequested = true;
+static void SendSetupPage(WiFiClient& client) {
+    client.println("HTTP/1.1 200 OK");
+    client.println("Content-Type: text/html");
+    client.println("Connection: close");
+    client.println();
+    client.println("<html>");
+    client.println("<head>");
+    client.println("<title>Bilge Monitor Setup</title>");
+    client.println("</head>");
+    client.println("<body>");
+
+    client.println("<h2>Bilge Monitor Setup</h2>");
+
+    client.print("<p>Last SSID: ");
+    client.print(gConfig.lastSSID);
+    client.println("</p>");
+    client.print("<p>Ad Hoc SSID: ");
+    client.print(gConfig.adhocSSID);
+    client.println("</p>");
+    client.println("<form method='POST' action='/save'>");
+    client.println("SSID:<br>");
+    client.println("<input type='text' name='ssid'><br><br>");
+    client.println("Password:<br>");
+    client.println("<input type='password' name='password'><br><br>");
+    client.println("<input type='submit' value='Save'>");
+    client.println("</form>");
+    client.println("<p>Saving will overwrite the current Ad Hoc network.</p>");
+    client.println("</body>");
+    client.println("</html>");
 }
 
-/******************************************************************************
- *
- *  Configuration Accessors
- *
- ******************************************************************************/
-
-String GetLastSSID()
-{
-    return gConfig.lastSSID;
+static void SendSavedPage(WiFiClient& client) {
+    client.println("HTTP/1.1 200 OK");
+    client.println("Content-Type: text/html");
+    client.println();
+    client.println("<html><body>");
+    client.println("<h2>Network Saved</h2>");
+    client.println("<p>Attempting connection...</p>");
+    client.println("</body></html>");
 }
 
-String GetAdhocSSID()
+//*****************************************************************************
+// Global Flag
+//*****************************************************************************
+bool blnProvisioningComplete = false;
+
+//*****************************************************************************
+// URL Decode
+//*****************************************************************************
+
+String URLDecode(String strText)
 {
-    return gConfig.adhocSSID;
+    strText.replace("+", " ");
+
+    String strResult = "";
+
+    for (int i = 0; i < strText.length(); i++) {
+
+        if (strText[i] == '%' && i + 2 < strText.length()) {
+
+            char chrHex[3];
+
+            chrHex[0] = strText[i + 1];
+            chrHex[1] = strText[i + 2];
+            chrHex[2] = '\0';
+
+            strResult += (char)strtol(chrHex, NULL, 16);
+
+            i += 2;
+        }
+        else {
+
+            strResult += strText[i];
+
+        }
+    }
+
+    return strResult;
+}
+
+//*****************************************************************************
+// Save Ad Hoc Network
+//*****************************************************************************
+
+bool SaveAdHocNetwork(String strSSID, String strPassword) {
+    if (!SD.exists("/config")) {
+        SD.mkdir("/config");
+    }
+    File filConfig =
+        SD.open("/config/adhoc.cfg", FILE_WRITE);
+
+    if (!filConfig) {
+
+        Serial.println("ERROR: Cannot open adhoc.cfg");
+
+        return false;
+    }
+
+    filConfig.seek(0);
+
+    filConfig.println(strSSID);
+    filConfig.println(strPassword);
+
+    filConfig.close();
+
+    Serial.println("Ad Hoc network saved");
+
+    return true;
+}
+
+//*****************************************************************************
+// Parse POST Body
+// Input:
+//      ssid=MyWifi&password=Secret123
+//*****************************************************************************
+
+bool ParseProvisioningData(
+    String strBody,
+    String& strSSID,
+    String& strPassword)
+{
+    int intSSIDStart = strBody.indexOf("ssid=");
+    int intPassStart = strBody.indexOf("&password=");
+
+    if (intSSIDStart < 0 || intPassStart < 0) {
+
+        return false;
+
+    }
+
+    strSSID =
+        strBody.substring(
+            intSSIDStart + 5,
+            intPassStart);
+
+    strPassword =
+        strBody.substring(
+            intPassStart + 10);
+
+    strSSID = URLDecode(strSSID);
+    strPassword = URLDecode(strPassword);
+
+    return true;
+}
+
+//*****************************************************************************
+// Handle POST /save
+//*****************************************************************************
+
+void HandleSaveRequest(WiFiClient& client) {
+    int intContentLength = 0;
+    //-------------------------------------------------------------------------
+    // Read Headers
+    //-------------------------------------------------------------------------
+    while (client.connected()) {
+        String strLine = client.readStringUntil('\n');
+        strLine.trim();
+        if (strLine.startsWith("Content-Length:")) {
+            intContentLength = strLine.substring(15).toInt();
+        }
+
+        if (strLine.length() == 0) {
+            break;      // Blank line = end of headers
+        }
+    }
+    //-------------------------------------------------------------------------
+    // Read Body
+    //-------------------------------------------------------------------------
+    String strBody = "";
+    unsigned long ulStart = millis();
+
+    while ((int)strBody.length() < intContentLength && millis() - ulStart < 5000) {
+        while (client.available()) {
+            strBody += (char)client.read();
+
+        }
+    }
+
+    Serial.println();
+    Serial.print("POST BODY: ");
+    Serial.println(strBody);
+
+    //-------------------------------------------------------------------------
+    // Parse
+    //-------------------------------------------------------------------------
+
+    String strSSID;
+    String strPassword;
+
+    if (!ParseProvisioningData(
+            strBody,
+            strSSID,
+            strPassword))
+    {
+        client.println("HTTP/1.1 400 Bad Request");
+        client.println("Content-Type: text/html");
+        client.println();
+        client.println("<html><body>");
+        client.println("<h2>Invalid Request</h2>");
+        client.println("</body></html>");
+
+        return;
+    }
+
+    Serial.print("SSID: ");
+    Serial.println(strSSID);
+
+    Serial.print("PASSWORD: ");
+    Serial.println(strPassword);
+
+    //-------------------------------------------------------------------------
+    // Save
+    //-------------------------------------------------------------------------
+
+    if (!SaveAdHocNetwork(strSSID, strPassword)) {
+        client.println("HTTP/1.1 500 Internal Server Error");
+        client.println("Content-Type: text/html");
+        client.println();
+        client.println("<html><body>");
+        client.println("<h2>Save Failed</h2>");
+        client.println("</body></html>");
+
+        return;
+    }
+
+    //-------------------------------------------------------------------------
+    // Success Response
+    //-------------------------------------------------------------------------
+
+    client.println("HTTP/1.1 200 OK");
+    client.println("Content-Type: text/html");
+    client.println();
+    client.println("<html>");
+    client.println("<body>");
+    client.println("<h2>Network Saved</h2>");
+    client.println("<p>Attempting connection...</p>");
+    client.println("</body>");
+    client.println("</html>");
+
+    delay(250);
+
+    client.stop();
+
+    blnProvisioningComplete = true;
+}
+
+void HandleWebClient(WiFiClient& client) {
+    String strSSID;
+    String strPassword;
+    
+    String request = client.readStringUntil('\r');
+
+    Serial.println();
+    Serial.print("REQUEST: ");
+    Serial.println(request);
+
+    if (request.startsWith("GET / ")) {
+        SendSetupPage(client);
+    } else if (request.startsWith("POST /save")) {
+        Serial.println("POST DETECTED");
+
+        unsigned long start = millis();
+
+        String strBody = "";
+
+        while ((millis() - start) < 3000) {
+            while (client.available()) {
+                char c = client.read();
+                strBody += c;
+                start = millis();
+            }
+        }
+        Serial.println();
+        Serial.print("BODY: ");
+        Serial.println(strBody);
+
+        int intSSIDStart = strBody.indexOf("ssid=");
+        int intPassStart = strBody.indexOf("&password=");
+
+        if (intSSIDStart >= 0 && intPassStart >= 0)
+        {
+            strSSID = strBody.substring(intSSIDStart + 5, intPassStart);
+            strPassword = strBody.substring(intPassStart + 10);
+
+            Serial.print("SSID: ");
+            Serial.println(strSSID);
+            Serial.print("Password: ");
+            Serial.println(strPassword);
+
+            strSSID = URLDecode(strSSID);
+            // Convert Windows-1252 smart quote to UTF-8
+            strSSID.replace("\x92", "\xE2\x80\x99");
+            strPassword = URLDecode(strPassword);
+
+            // Serial.print("Decoded: [");
+            // Serial.print(strSSID);
+            // Serial.println("]");
+        }
+
+        // Serial.print("SSID bytes: ");
+        // for (int i = 0; i < strSSID.length(); i++)
+        // {
+        //     Serial.print((uint8_t)strSSID[i], HEX);
+        //     Serial.print(' ');
+        // }
+        // Serial.println();
+
+        // Save the new network
+        if (SaveAdhocNetwork(strSSID, strPassword)) {
+
+            // Tell the WiFi state machine we're done
+            blnProvisioningComplete = true;
+
+            SendSavedPage(client);
+        } else {
+            SendSetupPage(client);
+        }
+    }
+
+        delay(10);
+
+        client.stop();
 }
 
 String GetWiFiStateString()
